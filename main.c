@@ -1,123 +1,57 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-
-#include "MQTTPacket.h"
-#include "transport.h"
-
 #include <signal.h>
+#include <unistd.h>
 
-int toStop = 0;
-
-void cfinish(int sig)
-{
-	signal(SIGINT, NULL);
-	toStop = 1;
-}
-
-void stop_init(void)
-{
-	signal(SIGINT, cfinish);
-	signal(SIGINT, cfinish);
-}
+#include "transport.h"
+#include "mqtt_func.h"
 
 int main(int argc, char *argv[])
 {
-	MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
-	int rc = 0;
-	int mysock = 0;
-	unsigned char buf[200];
-	int buflen = sizeof(buf);
-	int msgid = 1;
-	MQTTString topicString = MQTTString_initializer;
-	int req_qos = 0;
-	char *payload = "mypayload";
-	int payloadlen = strlen(payload);
-	int len = 0;
-	char *host = "192.168.1.11";
+	static int mqtt_state = 0;
+	char *host = "192.168.111.111";
+	char *topicname;
 	int port = 8087;
-
-	stop_init();
+	int g_sockfd = -1;
+	int cmd = 0;
+	topicname = (char*)malloc(sizeof(char)*20);
 	if(argc > 1)
 		host = argv[1];
 	if(argc > 2)
 		port = atoi(argv[2]);
-
-	mysock = transport_open(host, port);
-	if(mysock < 0)
-		return mysock;
-	printf("sending to hostname %s port %d\n", host, port);
-
-	data.clientID.cstring = "arm-linnux";
-	data.keepAliveInterval = 20;
-	data.cleansession = 1;
-	data.username.cstring = "";
-	data.password.cstring = "";
-	
-	len = MQTTSerialize_connect(buf, buflen, &data);
-	rc = transport_sendPacketBuffer(mysock, buf, len);
-
-	/*wait for connack*/
-	if(MQTTPacket_read(buf, buflen, transport_getdata) == CONNACK)
+	if(argc > 3)
+		cmd = atoi(argv[3]);
+	if(argc > 4)
+		topicname = argv[4];
+	while(1)
 	{
-		unsigned char sessionPresent, connack_rc;
-	
-		if(MQTTDeserialize_connack(&sessionPresent, &connack_rc, buf, buflen) != 1 || connack_rc != 0)
-		{
-			printf("unable to connect, return code %d\n", connack_rc);
-			goto exit;
+		switch(mqtt_state){
+			case 0:
+				g_sockfd = mqtt_connect(host, port);
+				if(g_sockfd < 0){
+					printf("connect failed,g_sockfd is %d\n",g_sockfd);
+					break;
+				}
+				printf("###cmd is %d\n",cmd);
+				if(cmd == 0)
+					mqtt_state = 1;
+				else mqtt_state = 2;
+				break;
+			case 1:
+				mqtt_client_pub(g_sockfd, topicname, "hellowrld",10);
+				//mqtt_state++;
+				break;
+			case 2:
+				mqtt_client_sub(g_sockfd, topicname);
+				mqtt_state++;
+				break;
+			case 3:
+				mqtt_client_ping(g_sockfd);
+				break;
+			default: break;
 		}
+		sleep(1);
 	}
-	else goto exit;
-
-	/*subscribe*/
-	topicString.cstring = "substopic";
-	len = MQTTSerialize_subscribe(buf, buflen, 0, msgid, 1, &topicString, &req_qos);
-	
-	rc = transport_sendPacketBuffer(mysock, buf, len);
-	/*wait for suback*/
-	if(MQTTPacket_read(buf, buflen, transport_getdata) == SUBACK)
-	{
-		unsigned short submsgid;
-		int subcount;
-		int granted_qos;
-	
-		rc = MQTTDeserialize_suback(&submsgid, 1, &subcount, &granted_qos, buf, buflen);
-		if(granted_qos != 0)
-		{
-			printf("granted qos != 0, %d\n",granted_qos);
-			goto exit;
-		}
-	}
-	else goto exit;
-
-	/*loop getting msgs on subscribed topic*/
-	topicString.cstring = "pubtopic";
-	while(!toStop)
-	{
-		if(MQTTPacket_read(buf, buflen, transport_getdata) == PUBLISH)
-		{
-			unsigned char dup;
-			int qos;
-			unsigned char retained;
-			unsigned short msgid;
-			int payloadlen_in;
-			unsigned char *payload_in;
-			int rc;
-			MQTTString receivedTopic;
-
-			rc = MQTTDeserialize_publish(&dup, &qos, &retained, &msgid, &receivedTopic,&payload_in, &payloadlen_in, buf, buflen);
-			printf("message arrived *.%s\n",payloadlen_in, payload_in);
-		}
-		printf("publishing reading\n");
-		len = MQTTSerialize_publish(buf, buflen, 0, 0, 0, 0, topicString, (unsigned char *)payload, payloadlen);
-		rc = transport_sendPacketBuffer(mysock, buf, len);
-	} 	
-	printf("disconnecting\n");
-	len = MQTTSerialize_disconnect(buf, buflen);
-	rc = transport_sendPacketBuffer(mysock, buf, len);
-exit:
-	transport_close(mysock);
-	
-	return 0;
+	free(topicname);
 }

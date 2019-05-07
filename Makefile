@@ -1,4 +1,4 @@
-CC = gcc
+CC = arm-fsl-linux-gnueabi-gcc
 TARGET = mqttclient
 MQTT_SRC_PATH = ./mqtt_src
 TRANSPORT_PATH = ./transport
